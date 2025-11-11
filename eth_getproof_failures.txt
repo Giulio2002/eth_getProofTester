@@ -1,3 +1,0 @@
-# eth_getProof failures
-# RPC: https://palpable-convincing-waterfall.quiknode.pro/608e63e8c15d3315f8fd7759d243687d982dab87/
-
