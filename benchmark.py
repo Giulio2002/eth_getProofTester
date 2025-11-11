@@ -26,8 +26,13 @@ def build_curl(rpc_url: str, payload: Dict[str, Any]) -> str:
 
 def load_rows(path: str) -> List[Tuple[Optional[int], str, Optional[str]]]:
     """
-    Load rows from CSV and keep rows even if storage_slot is 'null' or empty.
-    For such rows, slot is set to None so we pass an empty list [] to eth_getProof.
+    Load rows from CSV produced by the new exporter with columns:
+      block_number, address, storage_slot, randomized_account, randomized_slot
+
+    - address: required (skip if empty)
+    - block_number: may be empty; keep as None to reuse the last seen block later
+    - storage_slot: "null"/empty -> None (we'll send an empty slot list to eth_getProof)
+    - randomized_*: ignored here (we include all rows)
     """
     try:
         fh = open(path, "r", newline="")
@@ -36,7 +41,7 @@ def load_rows(path: str) -> List[Tuple[Optional[int], str, Optional[str]]]:
         sys.exit(1)
 
     reader = csv.DictReader(fh)
-    required = {"block_number", "to", "storage_slot"}
+    required = {"block_number", "address", "storage_slot"}
     missing = [x for x in required if x not in reader.fieldnames]
     if missing:
         print(f"CSV missing columns: {', '.join(missing)}", file=sys.stderr)
@@ -44,17 +49,14 @@ def load_rows(path: str) -> List[Tuple[Optional[int], str, Optional[str]]]:
 
     rows: List[Tuple[Optional[int], str, Optional[str]]] = []
     for r in reader:
-        raw_slot = (r.get("storage_slot") or "").strip()
-        addr = (r.get("to") or "").strip()
-        bn_raw = (r.get("block_number") or "").strip()
-
+        addr = (r.get("address") or "").strip()
         if not addr:
-            print(f"[WARN] Skipping row with empty address: {r}", file=sys.stderr)
             continue
 
-        # slot can be None -> means "no storage keys"
+        raw_slot = (r.get("storage_slot") or "").strip()
         slot: Optional[str] = None if (raw_slot == "" or raw_slot.lower() == "null") else raw_slot
 
+        bn_raw = (r.get("block_number") or "").strip()
         bn: Optional[int] = None
         if bn_raw:
             try:
@@ -133,7 +135,7 @@ def run_batch(
                 error_msg = f"RPC error {data['error'].get('code')}: {data['error'].get('message')}"
             else:
                 res = data.get("result")
-                # accountProof is always present; storageProof can be empty list if no slots were requested
+                # accountProof should exist; storageProof may be empty if no slots were requested
                 if isinstance(res, dict) and "accountProof" in res and "storageProof" in res:
                     ok = True
                 else:
@@ -203,9 +205,9 @@ def main():
                         help="Run twice: once with 'latest' and once with the real block numbers.")
     args = parser.parse_args()
 
-    base_rows = load_rows(args.inp)  # (bn_opt, addr, slot_opt)
+    base_rows = load_rows(args.inp)  # (bn_opt, address, slot_opt)
     print(len(base_rows), "rows loaded from", args.inp)
-    rows = resolve_block_numbers(base_rows)  # (effective_bn, original_bn_opt, addr, slot_opt)
+    rows = resolve_block_numbers(base_rows)  # (effective_bn, original_bn_opt, address, slot_opt)
 
     # Initialize failure log
     try:
