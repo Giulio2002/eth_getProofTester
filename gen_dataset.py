@@ -167,7 +167,7 @@ def main():
                     writer.writerow({
                             "block_number": bn,
                             "address": to_addr,
-                            "storage_slot": "null"
+                            "storage_slot": "null",
                             "randomized_account": False,
                             "randomized_slot": True
                         })
