@@ -4,29 +4,31 @@ import csv
 import sys
 import time
 import json
-from typing import Any, Dict, List, Tuple, Callable, Union
+from typing import Any, Dict, List, Tuple, Callable, Union, Optional
 import requests
 
 def to_hex(n: int) -> str:
     return hex(n)
 
-def build_payload(req_id: int, address: str, slot: str, block_param: Union[int, str]) -> Dict[str, Any]:
-    if isinstance(block_param, int):
-        block_tag = to_hex(block_param)
-    else:
-        block_tag = block_param  # e.g., "latest"
+def build_payload(req_id: int, address: str, slot: Optional[str], block_param: Union[int, str]) -> Dict[str, Any]:
+    block_tag = to_hex(block_param) if isinstance(block_param, int) else block_param  # e.g., "latest"
+    storage_keys = [] if slot is None else [slot]
     return {
         "jsonrpc": "2.0",
         "id": req_id,
         "method": "eth_getProof",
-        "params": [address, [slot], block_tag],
+        "params": [address, storage_keys, block_tag],
     }
 
 def build_curl(rpc_url: str, payload: Dict[str, Any]) -> str:
     body = json.dumps(payload, separators=(",", ":"))
     return f"curl -s -X POST '{rpc_url}' -H 'Content-Type: application/json' -d '{body}'"
 
-def load_rows(path: str) -> List[Tuple[int, str, str]]:
+def load_rows(path: str) -> List[Tuple[Optional[int], str, Optional[str]]]:
+    """
+    Load rows from CSV and keep rows even if storage_slot is 'null' or empty.
+    For such rows, slot is set to None so we pass an empty list [] to eth_getProof.
+    """
     try:
         fh = open(path, "r", newline="")
     except Exception as e:
@@ -40,29 +42,57 @@ def load_rows(path: str) -> List[Tuple[int, str, str]]:
         print(f"CSV missing columns: {', '.join(missing)}", file=sys.stderr)
         sys.exit(1)
 
-    filtered: List[Tuple[int, str, str]] = []
+    rows: List[Tuple[Optional[int], str, Optional[str]]] = []
     for r in reader:
-        slot = (r.get("storage_slot") or "").strip()
+        raw_slot = (r.get("storage_slot") or "").strip()
         addr = (r.get("to") or "").strip()
         bn_raw = (r.get("block_number") or "").strip()
 
-        if not addr or not slot or slot.lower() == "null" or not bn_raw:
+        if not addr:
+            print(f"[WARN] Skipping row with empty address: {r}", file=sys.stderr)
             continue
 
-        try:
-            bn = int(bn_raw)
-        except ValueError:
-            continue
+        # slot can be None -> means "no storage keys"
+        slot: Optional[str] = None if (raw_slot == "" or raw_slot.lower() == "null") else raw_slot
 
-        filtered.append((bn, addr, slot))
+        bn: Optional[int] = None
+        if bn_raw:
+            try:
+                bn = int(bn_raw)
+            except ValueError:
+                bn = None  # will try to use last valid later
+
+        rows.append((bn, addr, slot))
 
     fh.close()
-    return filtered
+    return rows
+
+def resolve_block_numbers(rows: List[Tuple[Optional[int], str, Optional[str]]]) -> List[Tuple[int, Optional[int], str, Optional[str]]]:
+    """
+    Turn (bn_opt, addr, slot) into (effective_bn, original_bn_opt, addr, slot).
+    If bn_opt is None, reuse last effective_bn. If none seen yet, skip the row.
+    """
+    resolved: List[Tuple[int, Optional[int], str, Optional[str]]] = []
+    last_bn: Optional[int] = None
+    skipped = 0
+    for bn_opt, addr, slot in rows:
+        if bn_opt is not None:
+            effective = bn_opt
+            last_bn = bn_opt
+        else:
+            if last_bn is None:
+                skipped += 1
+                continue
+            effective = last_bn
+        resolved.append((effective, bn_opt, addr, slot))
+    if skipped:
+        print(f"[WARN] Skipped {skipped} rows with empty/invalid block_number before any valid block was seen.", file=sys.stderr)
+    return resolved
 
 def run_batch(
     mode_name: str,
     rpc_url: str,
-    rows: List[Tuple[int, str, str]],
+    rows: List[Tuple[int, Optional[int], str, Optional[str]]],  # (effective_bn, original_bn_opt, addr, slot)
     fail_out: str,
     block_param_fn: Callable[[int], Union[int, str]],
 ):
@@ -80,9 +110,9 @@ def run_batch(
     req_id = 0
     failure_records: List[str] = []
 
-    for i, (bn, addr, slot) in enumerate(rows, start=1):
+    for i, (effective_bn, original_bn_opt, addr, slot) in enumerate(rows, start=1):
         req_id += 1
-        block_param = block_param_fn(bn)
+        block_param = block_param_fn(effective_bn)
         payload = build_payload(req_id, addr, slot, block_param)
         started = time.monotonic()
 
@@ -103,6 +133,7 @@ def run_batch(
                 error_msg = f"RPC error {data['error'].get('code')}: {data['error'].get('message')}"
             else:
                 res = data.get("result")
+                # accountProof is always present; storageProof can be empty list if no slots were requested
                 if isinstance(res, dict) and "accountProof" in res and "storageProof" in res:
                     ok = True
                 else:
@@ -115,14 +146,17 @@ def run_batch(
         elapsed = time.monotonic() - started
         latencies.append(elapsed)
 
+        slot_disp = slot if slot is not None else "-"
         if ok:
-            print(f"[{mode_name}] [{i}/{total}] SUCCESS block={bn} addr={addr} slot={slot}")
+            print(f"[{mode_name}] [{i}/{total}] SUCCESS block_eff={effective_bn} block_orig={original_bn_opt} addr={addr} slot={slot_disp}")
             successes += 1
         else:
-            print(f"[{mode_name}] [{i}/{total}] FAILURE block={bn} addr={addr} slot={slot} error={error_msg}")
+            print(f"[{mode_name}] [{i}/{total}] FAILURE block_eff={effective_bn} block_orig={original_bn_opt} addr={addr} slot={slot_disp} error={error_msg}")
             failures += 1
             failure_records.append("# ---- FAILURE -----------------------------------------")
-            failure_records.append(f"# Mode={mode_name} Row {i}/{total} original_block={bn} addr={addr} slot={slot}")
+            failure_records.append(
+                f"# Mode={mode_name} Row {i}/{total} effective_block={effective_bn} original_block={original_bn_opt} addr={addr} slot={slot_disp}"
+            )
             if http_status:
                 failure_records.append(f"# HTTP {http_status}")
             if error_msg:
@@ -161,7 +195,7 @@ def run_batch(
 def main():
     parser = argparse.ArgumentParser(description="Benchmark eth_getProof over rows from a CSV.")
     parser.add_argument("--rpc", required=True)
-    parser.add_argument("--in", dest="inp", required=True, default="dataset.csv")
+    parser.add_argument("--in", dest="inp", default="dataset.csv")
     parser.add_argument("--fail-out", default="eth_getproof_failures.txt")
     parser.add_argument("--simulate-latest", action="store_true",
                         help="Use 'latest' as the block tag instead of per-row block numbers.")
@@ -169,9 +203,11 @@ def main():
                         help="Run twice: once with 'latest' and once with the real block numbers.")
     args = parser.parse_args()
 
-    rows = load_rows(args.inp)
+    base_rows = load_rows(args.inp)  # (bn_opt, addr, slot_opt)
+    print(len(base_rows), "rows loaded from", args.inp)
+    rows = resolve_block_numbers(base_rows)  # (effective_bn, original_bn_opt, addr, slot_opt)
 
-    # Clear/initialize failure log with a header for this run
+    # Initialize failure log
     try:
         with open(args.fail_out, "w", encoding="utf-8") as fo:
             fo.write(f"# eth_getProof failures\n# RPC: {args.rpc}\n\n")
@@ -179,7 +215,6 @@ def main():
         print(f"Could not initialize failure log: {e}", file=sys.stderr)
 
     if args.simulate_all:
-        # First pass: latest
         run_batch(
             mode_name="SIM-LATEST",
             rpc_url=args.rpc,
@@ -187,7 +222,6 @@ def main():
             fail_out=args.fail_out,
             block_param_fn=lambda _bn: "latest",
         )
-        # Second pass: actual block numbers
         run_batch(
             mode_name="REAL-BLOCKS",
             rpc_url=args.rpc,
@@ -196,7 +230,6 @@ def main():
             block_param_fn=lambda bn: bn,
         )
     elif args.simulate_latest:
-        # Only latest
         run_batch(
             mode_name="SIM-LATEST",
             rpc_url=args.rpc,
@@ -205,7 +238,6 @@ def main():
             block_param_fn=lambda _bn: "latest",
         )
     else:
-        # Only real block numbers
         run_batch(
             mode_name="REAL-BLOCKS",
             rpc_url=args.rpc,

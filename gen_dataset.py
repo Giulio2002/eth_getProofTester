@@ -107,7 +107,7 @@ def main():
 
     total_blocks = end_block - args.start + 1
 
-    fields = ["block_number", "from", "to", "storage_slot", "randomized_account", "randomized_slot"]
+    fields = ["block_number", "address", "storage_slot", "randomized_account", "randomized_slot"]
     out_fh = open(args.out, "w", newline="")
     writer = csv.DictWriter(out_fh, fieldnames=fields)
     writer.writeheader()
@@ -143,9 +143,15 @@ def main():
 
                 writer.writerow({
                     "block_number": bn,
-                    "from": from_addr,
-                    "to": to_addr,
+                    "address": to_addr,
                     "storage_slot": storage_slot if storage_slot else "null",
+                    "randomized_account": False,
+                    "randomized_slot": False
+                })
+                writer.writerow({
+                    "block_number": bn,
+                    "address": from_addr,
+                    "storage_slot": "null",
                     "randomized_account": False,
                     "randomized_slot": False
                 })
@@ -153,18 +159,30 @@ def main():
                 if args.noisy:
                     writer.writerow({
                         "block_number": bn,
-                        "from": from_addr,
-                        "to": rand_address(),
+                        "address": from_addr,
                         "storage_slot": "null",
                         "randomized_account": True,
                         "randomized_slot": False
                     })
+                    writer.writerow({
+                            "block_number": bn,
+                            "address": to_addr,
+                            "storage_slot": "null"
+                            "randomized_account": False,
+                            "randomized_slot": True
+                        })
 
                     if storage_slot is not None:
                         writer.writerow({
                             "block_number": bn,
-                            "from": from_addr,
-                            "to": to_addr,
+                            "address": from_addr,
+                            "storage_slot": rand_slot_key(),
+                            "randomized_account": False,
+                            "randomized_slot": True
+                        })
+                        writer.writerow({
+                            "block_number": bn,
+                            "address": to_addr,
                             "storage_slot": rand_slot_key(),
                             "randomized_account": False,
                             "randomized_slot": True
@@ -180,11 +198,10 @@ def main():
     if args.noisy:
         out_fh = open(args.out, "a", newline="")
         writer = csv.DictWriter(out_fh, fieldnames=fields)
-        for _ in range(1000):
+        for _ in range(100):
             writer.writerow({
                 "block_number": "",
-                "from": rand_address(),
-                "to": rand_address(),
+                "address": rand_address(),
                 "storage_slot": rand_slot_key(),
                 "randomized_account": True,
                 "randomized_slot": True

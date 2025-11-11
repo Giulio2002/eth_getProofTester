@@ -1,2 +1,2 @@
 In order to generate the dataset, run `python3 gen_dataset.py --rpc <RPC> --start N --end M --noisy`. `--noisy` will add some and non-existent account/slots.
-In order to directly run the benchmarking tool, run `python3 benchmark.py --rpc <RPC>`
+In order to directly run the benchmarking tool, run `python3 benchmark.py --rpc <RPC>`. you can add `--simulate-all` to simulate both historical and "latest" queries and `--simulate-latest` to only simulate "latest" queries. the absence of either flags will just query historical queries.
