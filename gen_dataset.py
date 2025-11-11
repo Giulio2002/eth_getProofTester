@@ -113,12 +113,14 @@ def main():
     writer.writeheader()
 
     try:
+        last_block_processed = 0
         for idx, bn in enumerate(range(args.start, end_block + 1), start=1):
             block = get_block_with_txs(rpc, bn)
             if not block:
                 print(f"[{idx}/{total_blocks}] Skipped block {bn}: no data")
                 continue
 
+            last_block_processed = bn
             block_tag = to_hex(bn)
             block_hash = block.get("hash")
             txs = block.get("transactions") or []
@@ -207,7 +209,7 @@ def main():
         writer = csv.DictWriter(out_fh, fieldnames=fields)
         for _ in range(100):
             writer.writerow({
-                "block_number": "",
+                "block_number": last_block_processed,
                 "address": rand_address(),
                 "storage_slot": rand_slot_key(),
                 "randomized_account": True,
