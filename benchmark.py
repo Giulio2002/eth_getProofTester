@@ -148,7 +148,7 @@ def run_batch(
         elapsed = time.monotonic() - started
         latencies.append(elapsed)
 
-        slot_disp = slot if slot is not None else "-"
+        slot_disp = slot if slot is not None else "null"
         if ok:
             print(f"[{mode_name}] [{i}/{total}] SUCCESS block_eff={effective_bn} block_orig={original_bn_opt} addr={addr} slot={slot_disp}")
             successes += 1
