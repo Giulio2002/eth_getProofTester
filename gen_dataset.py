@@ -187,6 +187,13 @@ def main():
                             "randomized_account": False,
                             "randomized_slot": True
                         })
+                        writer.writerow({
+                            "block_number": bn,
+                            "address": to_addr,
+                            "storage_slot": "null",
+                            "randomized_account": False,
+                            "randomized_slot": True
+                        })
 
             print(f"[{idx}/{total_blocks}] Processed block {bn} with {len(txs)} transactions, {txsContract} to contracts.")
 
