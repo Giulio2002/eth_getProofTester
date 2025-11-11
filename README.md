@@ -1,0 +1,2 @@
+In order to generate the dataset, run `python3 fetch_authentic.py --rpc <RPC> --start N --end M --noisy`. `--noisy` will add some and non-existent account/slots.
+In order to directly run the benchmarking tool, run `python3 benchmark.py --rpc <RPC>`
